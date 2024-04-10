@@ -1,0 +1,135 @@
+#####Call serovars (Using CISTR_cmd)
+
+nano run_sistr.sh
+
+#!/bin/bash
+
+# Specify the input directory and output directory
+input_dir="/Users/Yehao/PolyU_DryLab/ASEAN/20240123Genomes"
+output_dir="/Users/Yehao/PolyU_DryLab/ASEAN/20240123/SISTR_output/"
+
+# Loop through each .fna file in the input directory
+for file in "${input_dir}"/*.fna; do
+    # Extract the filename without the path and extension
+    filename=$(basename -- "$file")
+    filename_no_ext="${filename%.*}"
+
+    # Run the sistr command with two items for -i
+    sistr -i "${file}" "${filename}" -f csv -o "${output_dir}${filename_no_ext}_output.csv"
+done
+
+
+chmod +x run_sistr.sh
+
+./run_sistr.sh
+
+cat SISTR_output/*.csv > combined_SISTR_result.csv
+
+awk '!seen[$0]++' combined_SISTR_result.csv > combined_SISTR_result_no_duplicates.csv
+
+
+
+#####Call sequence types (Using MLST)
+
+$HOME/mlst/bin/mlst --csv *  > mlst_20240124.csv
+
+
+
+#####Call AMRs (Using Abricate)
+
+abricate --db resfinder Genomes/* > abricate_output_resfinder_20240119.csv
+
+
+#####Call SNPs (Using Snippy)
+
+find "$(pwd)" -maxdepth 1 -type f -exec sh -c 'printf "%s\t%s\n" "$(basename "$0" | cut -f 1 -d ".")" "$0"' {} \; > file_list.txt
+#Rename file_list.txt as input.tab
+
+snippy-multi input.tab --ref Salmonella_Typhimurium_LT2.fna --cpus 12 > runme.sh
+
+sh runme.sh
+
+#Rename core.aln (the output) as core.fasta
+
+
+#####Generate phylogeny
+FastTree -nt -gtr -gamma core_revised.fasta > input.tre
+
+
+#####Tree plotting
+R
+library(ape)
+library(ggtree)
+library(ggplot2)
+library(RColorBrewer)
+library(dplyr)
+library(ggnewscale)
+library(viridis)
+
+tree = read.tree("input.tre")
+newtree = root(tree, outgroup = "Salmonella_Typhimurium_LT2", resolve.root = TRUE)
+
+dd <- read.csv("Phylogenetic_tree_metadata_20240126_revised.csv", check.names=FALSE)
+
+Serovar = dd[,c(1,3)]
+rnames = Serovar$Filename
+Serovar = Serovar %>% select (-Filename)
+rownames(Serovar) <- rnames
+Serovar = as.matrix(Serovar)
+
+ST = dd[,c(1,4)]
+rnames = ST$Filename
+ST = ST %>% select (-Filename)
+rownames(ST) <- rnames
+ST = as.matrix(ST)
+
+Source = dd[,c(1,5)]
+rnames = Source$Filename
+Source = Source %>% select (-Filename)
+rownames(Source) <- rnames
+Source = as.matrix(Source)
+
+AMR = dd[,-c(1,2,3,4,5)]
+rnames = dd$Filename
+rownames(AMR) <- rnames
+AMR = as.matrix(AMR)
+AMR <- ifelse(AMR == 0, "Absence", "Presence")
+
+clusterdd = data.frame(node=c(804, 806, 912, 972, 993, 1119, 1063, 1179, 1206, 1257, 1309, 1333), type=c("A", "B", "C", "D", "E", "F", "G", "H" , "I", "J", "K", "L"))
+
+#location colours
+combined_palette = c("#a34f9f", "#daa459", "#900C3F", "#e78194", "#05b8ab", "#fece48", "#0990ca", "#864ba1", "#999999", "#0153a2", "#afd16b", "#38badc")
+#Clade colours
+Clade_colors <- viridis_pal(option = "turbo")(12)
+#Serovar colours
+new_Serovar_colors <- viridis_pal(direction = -1, option = "plasma")(84)
+#Sequence type colours
+new_ST_colors <- viridis_pal()(114)
+#Source colours
+Source_palette = brewer.pal(8, "Dark2")
+Source_colour = Source_palette[3:6]
+
+
+p0 <- ggtree(newtree, branch.length="none") %<+% dd + geom_tiplab(size=0.5, offset = 0, aes(color=Location)) + geom_tippoint(size=0.08, aes(color=Location)) + scale_color_manual(values = combined_palette) + guides(color = guide_legend(override.aes = list(size = 5)))
+
+p1 = p0 + geom_hilight(data=clusterdd, aes(node=node, fill=type), type = "roundrect", alpha = 0.5) +
+        scale_fill_manual(values = Clade_colors) + labs(fill = "Clades")
+
+p2 = p1 + new_scale_fill()
+
+p3 = gheatmap(p2, Serovar, offset = 6, width = 0.03, colnames = FALSE) + scale_fill_manual(values = new_Serovar_colors, na.translate=FALSE) + labs(fill = "Serovar")
+
+p4 = p3 + new_scale_fill()
+
+p5 = gheatmap(p4, ST, offset = 9, width = 0.03, colnames = FALSE) + scale_fill_manual(values = new_ST_colors, na.translate=FALSE) + labs(fill = "Sequence Type")
+
+p6 = p5 + new_scale_fill()
+
+p7 = gheatmap(p6, Source, offset = 12, width = 0.03, colnames = FALSE) + scale_fill_manual(values = Source_colour, na.translate=FALSE) + labs(fill = "Source")
+
+p8 = p7 + new_scale_fill()
+
+p9 = gheatmap(p8, AMR, offset = 15, width = 2.4, colnames = TRUE, colnames_position = "top", font.size=1.5, colnames_angle=90, hjust=0) + scale_fill_manual(values = c("#BFE59F", "red"), na.translate=FALSE) + labs(fill = "Antimicrobial resistance")
+
+p9 + ggtree::vexpand(.1, 1)
+
